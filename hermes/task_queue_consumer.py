@@ -14,7 +14,7 @@ task_queue_consumer.py — Hermes 侧 task-queue 消费端（审核 20260831-017
   python3 task_queue_consumer.py --dry-run  # 只读不执行
 
 输出约定（monitor 门控）：
-  健康恒静默（无输出）；异常输出稳定签名行，供 dsh_heartbeat_monitor 门控。
+  健康恒静默（无输出）；异常输出稳定签名行（无时间戳，020 审核），供 dsh_heartbeat_monitor 门控。
 """
 import datetime
 import json
@@ -36,7 +36,9 @@ def now_iso():
 
 
 def log(msg):
-    print(f"[task-queue-consumer] {now_iso()} {msg}", flush=True)
+    # 020 审核意见1：monitor 契约要求输出稳定（no timestamps）——
+    # 时间戳会让同一异常每 tick 重触发 agent，去掉时间戳，用固定前缀 + 任务 id + 稳定 note
+    print(f"[task-queue-consumer] {msg}", flush=True)
 
 
 def read_json(p):
@@ -137,7 +139,12 @@ def last_processed_id():
 
 
 def execute_task(task):
-    """执行任务，返回 (ok, note)。"""
+    """执行任务，返回 (result, note)；result ∈ {done, defer, failed}。
+
+    - done:   任务完成（含去重——使命已达成）
+    - defer:  门禁拒绝（冷却/多实例），不烧 attempts，保持 queued 等下次 cron
+    - failed: 真实执行失败（kickstart 失败等），才计 attempts
+    """
     tier = task.get("tier")
     payload = task.get("payload") or {}
 
@@ -146,7 +153,7 @@ def execute_task(task):
         req_path = os.path.join(REVIEW_DIR, "request.json")
         rid = payload.get("requestId")
         if rid and last_processed_id() == rid:
-            return False, "去重：该 requestId 已处理过"
+            return "done", f"去重：requestId {rid} 已处理过（使命完成）"
         # 写 review-handoff/request.json（复用现有语义）
         req = {
             "protocol": "review-handoff/v1",
@@ -161,16 +168,16 @@ def execute_task(task):
             "status": "pending",
         }
         write_json(req_path, req)
-        return True, f"已写 request.json ({rid})"
+        return "done", f"已写 request.json ({rid})"
 
     if tier == "reset":
-        # reset 门禁（016/017 致命意见）
+        # reset 门禁（016/017 致命意见；020 意见2：门禁拒绝走 defer，不烧 attempts）
         ok, note = guardian_cooldown_ok()
         if not ok:
-            return False, f"reset 门禁拒绝: {note}"
+            return "defer", f"reset 门禁拒绝: {note}"
         ok, note = single_instance_ok()
         if not ok:
-            return False, f"reset 门禁拒绝: {note}"
+            return "defer", f"reset 门禁拒绝: {note}"
         # 三段式重启（意见2：移植 reset_agent.py restart()，禁无条件 kickstart -k）
         label = f"gui/{os.getuid()}/com.dsh.web"
         pids = dsh_pids()
@@ -188,19 +195,19 @@ def execute_task(task):
                 # SIGTERM 后卡死 → kickstart -k 兜底（守则允许）
                 r2 = subprocess.run(["launchctl", "kickstart", "-k", label], capture_output=True, text=True, timeout=30)
                 if r2.returncode != 0:
-                    return False, f"kickstart -k 兜底失败: {r2.stderr.strip()[:200]}"
+                    return "failed", f"kickstart -k 兜底失败: {r2.stderr.strip()[:200]}"
                 write_json(os.path.expanduser("~/.dsh/reset-handoff/last-restart.json"),
                            {"restartedAt": now_iso()})
-                return True, "SIGTERM 卡死→kickstart -k 兜底"
+                return "done", "SIGTERM 卡死→kickstart -k 兜底"
         # 服务已死 → 不带 -k kickstart 拉起
         r3 = subprocess.run(["launchctl", "kickstart", label], capture_output=True, text=True, timeout=30)
         if r3.returncode != 0:
-            return False, f"kickstart(无-k) 拉起失败: {r3.stderr.strip()[:200]}"
+            return "failed", f"kickstart(无-k) 拉起失败: {r3.stderr.strip()[:200]}"
         write_json(os.path.expanduser("~/.dsh/reset-handoff/last-restart.json"),
                    {"restartedAt": now_iso()})
-        return True, "服务已死→kickstart 拉起"
+        return "done", "服务已死→kickstart 拉起"
 
-    return False, f"未知 tier: {tier}"
+    return "failed", f"未知 tier: {tier}"
 
 
 def main():
@@ -239,16 +246,21 @@ def main():
         task["updatedAt"] = now_iso()
         write_json(QUEUE, q)
 
-        # 执行
-        ok, note = execute_task(task)
+        # 执行（三态：done / defer / failed）
+        result, note = execute_task(task)
 
-        # 完成/失败
-        if ok:
+        # 完成/推迟/失败
+        if result == "done":
             task["status"] = "done"
+        elif result == "defer":
+            # 020 意见2：门禁拒绝不烧 attempts，保持 queued 等下次 cron 重试
+            task["status"] = "queued"
+            log(f"任务 {task.get('id')} 推迟: {note}")
         else:
             task["attempts"] = task.get("attempts", 0) + 1
-            task["status"] = "failed" if task["attempts"] > MAX_ATTEMPTS else "queued"
-            log(f"任务 {task.get('id')} {note}")
+            # 020 意见3：>= MAX_ATTEMPTS 即 failed（attempts 到 3 就判失败，语义与 MAX_ATTEMPTS=3 一致）
+            task["status"] = "failed" if task["attempts"] >= MAX_ATTEMPTS else "queued"
+            log(f"任务 {task.get('id')} 失败: {note}")
         task["claimedBy"] = None
         task["leaseExpiry"] = None
         task["updatedAt"] = now_iso()
