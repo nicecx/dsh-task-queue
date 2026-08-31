@@ -5,7 +5,7 @@ task_queue_consumer.py — Hermes 侧 task-queue 消费端（审核 20260831-017
 消费 ~/.dsh/task-queue/queue.json（唯一真相源），租约/认领模型，并发 1。
 
 安全设计（016/017 审核）：
-- reset 门禁：~/.dsh/.guardian-last-action 10min 退避 + 多实例检查 + SIGTERM+KeepAlive
+- reset 门禁：~/.dsh/reset-handoff/last-restart.json 10min 退避 + 多实例检查 + SIGTERM+KeepAlive 三段式
 - 单写者去重：处理前校验 review-handoff/state.json.lastProcessedId
 - 互斥锁：整个 read-pick-claim-write 周期持 busy 锁（O_EXCL 原子）
 
@@ -26,7 +26,6 @@ import time
 QUEUE = os.path.expanduser("~/.dsh/task-queue/queue.json")
 BUSY = os.path.expanduser("~/.dsh/task-queue/.hermes-busy")
 REVIEW_DIR = os.path.expanduser("~/.dsh/review-handoff")
-GUARDIAN_LAST = os.path.expanduser("~/.dsh/.guardian-last-action")
 LEASE_MS = 5 * 60 * 1000
 MAX_ATTEMPTS = 3
 RESET_COOLDOWN_SEC = 600  # 10min 退避
