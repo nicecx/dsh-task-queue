@@ -1,0 +1,7 @@
+# dsh-task-queue bundle patch: 挂载缓存梯队任务队列插件（宿主级，跨会话共享）。
+# 提供: task_enqueue / task_status / busy_mutex 相关工具与队列读写 API。
+# 架构（审核 20260831-015 approved）: queue.json 唯一真相源；
+# Hermes cron 消费（租约/认领），DSH watchdog 可选辅助。
+- insert:
+    - id: dsh-task-queue
+      name: 'dsh-task-queue'

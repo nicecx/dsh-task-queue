@@ -1,0 +1,28 @@
+{
+  "name": "dsh-task-queue",
+  "version": "0.1.0",
+  "description": "Tiered task queue for DSH↔Hermes coordination: queue.json is the single source of truth; tasks are enqueued by DSH mechanisms (review/lesson/reset) and consumed by the Hermes-side cron with a lease/claim model. Also provides the busy-mutex for serializing Hermes calls from the approve fast path.",
+  "type": "module",
+  "main": "src/index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nicecx/dsh-task-queue.git"
+  },
+  "keywords": ["dsh", "deepseek-harness", "dsh-plugin", "queue", "tiered", "task", "hermes", "ops"],
+  "scripts": {
+    "test": "node --test test/index.test.js",
+    "check": "node --test test/index.test.js"
+  },
+  "files": ["src", "cordis.patch.yml", "README.md", "LICENSE"]
+}
