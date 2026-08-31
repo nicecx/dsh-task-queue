@@ -14,7 +14,7 @@
  *  - busy_mutex_acquire/release              审批串行互斥锁（approve 快道用）
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync, closeSync, unlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -98,15 +98,33 @@ export function apply(ctx, rawConfig = {}) {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
       async execute(args) {
+        // 原子获取（O_EXCL 独占创建，修复 016 审核的 TOCTOU：读改写并发双双判未持有）
         ensureDir()
         const now = Date.now()
-        let cur = null
-        try { cur = existsSync(busyFile) ? JSON.parse(readFileSync(busyFile, 'utf8')) : null } catch { /* 忽略 */ }
-        if (cur && now < cur.expiresAt) {
-          return `⏳ 互斥锁被持有（owner=${cur.owner}，剩余 ${Math.round((cur.expiresAt - now) / 1000)}s）`
+        const ttl = (args.ttlSecs ?? 120) * 1000
+        try {
+          const fd = fs.openSync(busyFile, 'wx')
+          fs.writeFileSync(fd, JSON.stringify({ owner: args.owner, expiresAt: now + ttl }))
+          fs.closeSync(fd)
+          return '✅ 已获取互斥锁'
+        } catch (err) {
+          if (err.code !== 'EEXIST') return `❌ 获取失败: ${err.message}`
+          // 已存在：检查过期
+          try {
+            const cur = JSON.parse(fs.readFileSync(busyFile, 'utf8'))
+            if (now >= cur.expiresAt) {
+              // 过期抢占（原子：unlink 后重试一次）
+              try { fs.unlinkSync(busyFile) } catch { /* 竞争无妨 */ }
+              try {
+                const fd = fs.openSync(busyFile, 'wx')
+                fs.writeFileSync(fd, JSON.stringify({ owner: args.owner, expiresAt: now + ttl }))
+                fs.closeSync(fd)
+                return '✅ 已抢占过期互斥锁'
+              } catch (e2) { return `⏳ 抢占竞争失败（他人刚持有）` }
+            }
+            return `⏳ 互斥锁被持有（owner=${cur.owner}，剩余 ${Math.round((cur.expiresAt - now) / 1000)}s）`
+          } catch { return `❌ 锁文件损坏，请人工清理 ${busyFile}` }
         }
-        writeFileSync(busyFile, JSON.stringify({ owner: args.owner, expiresAt: now + (args.ttlSecs ?? 120) * 1000 }))
-        return '✅ 已获取互斥锁'
       },
     },
     {
