@@ -30,7 +30,10 @@ BUSY = os.path.join(os.path.dirname(QUEUE), ".hermes-busy")  # 与 DSH 侧 busy_
 REVIEW_DIR = os.environ.get("REVIEW_HANDOFF_DIR") or os.path.expanduser("~/.dsh/review-handoff")
 DOCS = os.path.join(REVIEW_DIR, "docs")  # 024/025：PROTOCOL 定义 docs/ 在此目录下
 # 025/026：权威路径（实测存在）；workspace 副本 dsh-reset-handoff/hermes/reset_agent.py 须同步
-RESET_AGENT = os.path.expanduser("~/.hermes/profiles/reset-agent/scripts/reset_agent.py")
+# env override（E2E 教训 2026-08-31）：离线测试必须能注入假 agent，防误调真实 reset_agent.py
+RESET_AGENT = os.environ.get("RESET_AGENT_PATH") or os.path.expanduser("~/.hermes/profiles/reset-agent/scripts/reset_agent.py")
+# 冷却文件同样支持 env 注入（离线 E2E 隔离）
+RESET_LAST_RESTART = os.environ.get("RESET_LAST_RESTART_PATH") or os.path.expanduser("~/.dsh/reset-handoff/last-restart.json")
 LEASE_MS = 5 * 60 * 1000
 MAX_ATTEMPTS = 3
 RESET_COOLDOWN_SEC = 600  # 10min 退避
@@ -92,8 +95,8 @@ def release_busy():
 def guardian_cooldown_ok():
     """reset 门禁：10min 退避（读 reset_agent.py 的 last-restart.json，JSON 可靠格式）。"""
     # 意见1（018 审核）：.guardian-last-action 是纯文本，read_json 必失败→恒放行；
-    # 改用统一冷却文件 ~/.dsh/reset-handoff/last-restart.json（reset_agent.py 同款）
-    lr = read_json(os.path.expanduser("~/.dsh/reset-handoff/last-restart.json"))
+    # 改用统一冷却文件（reset_agent.py 同款；env 注入支持离线 E2E）
+    lr = read_json(RESET_LAST_RESTART)
     if not lr:
         return True, ""
     last = lr.get("restartedAt")

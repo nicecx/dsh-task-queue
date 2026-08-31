@@ -26,9 +26,8 @@ class TestGuardianCooldown(unittest.TestCase):
         import datetime as dt
         with tempfile.TemporaryDirectory() as td:
             lr = os.path.join(td, "last-restart.json")
-            # 用 monkeypatch 指向临时文件
             tqc.write_json(lr, {"restartedAt": dt.datetime.now().astimezone().isoformat()})
-            with mock.patch.object(tqc.os.path, "expanduser", return_value=lr):
+            with mock.patch.object(tqc, "RESET_LAST_RESTART", lr):
                 ok, note = tqc.guardian_cooldown_ok()
             self.assertFalse(ok)
             # 精确断言稳定签名行（含秒数即失败）
@@ -38,7 +37,7 @@ class TestGuardianCooldown(unittest.TestCase):
         """无冷却记录 → 放行。"""
         with tempfile.TemporaryDirectory() as td:
             lr = os.path.join(td, "nonexistent.json")
-            with mock.patch.object(tqc.os.path, "expanduser", return_value=lr):
+            with mock.patch.object(tqc, "RESET_LAST_RESTART", lr):
                 ok, _ = tqc.guardian_cooldown_ok()
             self.assertTrue(ok)
 
