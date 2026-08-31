@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 QUEUE = os.path.expanduser("~/.dsh/task-queue/queue.json")
 BUSY = os.path.expanduser("~/.dsh/task-queue/.hermes-busy")
@@ -82,33 +83,53 @@ def release_busy():
 
 
 def guardian_cooldown_ok():
-    """reset 门禁：10min 退避。"""
-    g = read_json(GUARDIAN_LAST)
-    if not g:
+    """reset 门禁：10min 退避（读 reset_agent.py 的 last-restart.json，JSON 可靠格式）。"""
+    # 意见1（018 审核）：.guardian-last-action 是纯文本，read_json 必失败→恒放行；
+    # 改用统一冷却文件 ~/.dsh/reset-handoff/last-restart.json（reset_agent.py 同款）
+    lr = read_json(os.path.expanduser("~/.dsh/reset-handoff/last-restart.json"))
+    if not lr:
         return True, ""
-    last = g.get("ts")
+    last = lr.get("restartedAt")
     if not last:
         return True, ""
     try:
         last_dt = datetime.datetime.fromisoformat(last)
         elapsed = (datetime.datetime.now().astimezone() - last_dt).total_seconds()
         if elapsed < RESET_COOLDOWN_SEC:
-            return False, f"guardian 10min 退避中（已过 {int(elapsed)}s）"
+            return False, f"reset 10min 退避中（已过 {int(elapsed)}s）"
     except Exception:
         pass
     return True, ""
 
 
-def single_instance_ok():
-    """reset 门禁：多实例检查。"""
+def dsh_pids():
+    """过滤出真正的 dsh web 主进程（意见5：pgrep -f 会命中监控/包装进程）。"""
     try:
-        r = subprocess.run(["pgrep", "-f", "node.*dsh web"], capture_output=True, text=True, timeout=10)
-        pids = [p for p in r.stdout.split() if p.strip()]
-        if len(pids) > 1:
-            return False, f"多实例 {len(pids)} 个（{','.join(pids[:5])}），先清理保留一个"
-        return True, ""
-    except Exception as e:
-        return False, f"pgrep 失败: {e}"
+        r = subprocess.run(["pgrep", "-f", "node.*dsh"], capture_output=True, text=True, timeout=10)
+        pids = []
+        for p in r.stdout.split():
+            p = p.strip()
+            if not p:
+                continue
+            try:
+                # 校验进程命令行确实含 dsh web（排除监控/包装）
+                r2 = subprocess.run(["ps", "-o", "command=", "-p", p], capture_output=True, text=True, timeout=5)
+                cmd = r2.stdout.strip()
+                if "dsh" in cmd and "web" in cmd and "watchdog" not in cmd and "monitor" not in cmd:
+                    pids.append(p)
+            except Exception:
+                continue
+        return pids
+    except Exception:
+        return []
+
+
+def single_instance_ok():
+    """reset 门禁：多实例检查（用过滤后的 dsh_pids）。"""
+    pids = dsh_pids()
+    if len(pids) > 1:
+        return False, f"多实例 {len(pids)} 个（{','.join(pids[:5])}），先清理保留一个"
+    return True, ""
 
 
 def last_processed_id():
@@ -151,16 +172,34 @@ def execute_task(task):
         ok, note = single_instance_ok()
         if not ok:
             return False, f"reset 门禁拒绝: {note}"
-        # SIGTERM+KeepAlive（launchctl kickstart -k 会触发 KeepAlive；此处用 kickstart 触发重启）
-        r = subprocess.run(
-            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.dsh.web"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode != 0:
-            return False, f"重启失败: {r.stderr.strip()[:200]}"
-        # 记录 guardian-last-action（reset 执行后写入方 = 消费者）
-        write_json(GUARDIAN_LAST, {"ts": now_iso(), "action": "reset", "by": "task-queue-consumer"})
-        return True, "reset 已触发（SIGTERM+KeepAlive）"
+        # 三段式重启（意见2：移植 reset_agent.py restart()，禁无条件 kickstart -k）
+        label = f"gui/{os.getuid()}/com.dsh.web"
+        pids = dsh_pids()
+        if pids:
+            r = subprocess.run(["launchctl", "kill", "TERM", label], capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                deadline = time.time() + 20
+                while time.time() < deadline and dsh_pids():
+                    time.sleep(1)
+                if not dsh_pids():
+                    # 冷却写回 last-restart.json（意见3：统一冷却文件，不覆写纯文本 guardian）
+                    write_json(os.path.expanduser("~/.dsh/reset-handoff/last-restart.json"),
+                               {"restartedAt": now_iso()})
+                    return True, f"SIGTERM({','.join(pids)})+KeepAlive relaunch"
+                # SIGTERM 后卡死 → kickstart -k 兜底（守则允许）
+                r2 = subprocess.run(["launchctl", "kickstart", "-k", label], capture_output=True, text=True, timeout=30)
+                if r2.returncode != 0:
+                    return False, f"kickstart -k 兜底失败: {r2.stderr.strip()[:200]}"
+                write_json(os.path.expanduser("~/.dsh/reset-handoff/last-restart.json"),
+                           {"restartedAt": now_iso()})
+                return True, "SIGTERM 卡死→kickstart -k 兜底"
+        # 服务已死 → 不带 -k kickstart 拉起
+        r3 = subprocess.run(["launchctl", "kickstart", label], capture_output=True, text=True, timeout=30)
+        if r3.returncode != 0:
+            return False, f"kickstart(无-k) 拉起失败: {r3.stderr.strip()[:200]}"
+        write_json(os.path.expanduser("~/.dsh/reset-handoff/last-restart.json"),
+                   {"restartedAt": now_iso()})
+        return True, "服务已死→kickstart 拉起"
 
     return False, f"未知 tier: {tier}"
 
@@ -215,11 +254,7 @@ def main():
         task["leaseExpiry"] = None
         task["updatedAt"] = now_iso()
         write_json(QUEUE, q)
-        # 更新去重水位
-        if ok and task.get("tier") == "review":
-            state = read_json(os.path.join(REVIEW_DIR, "state.json")) or {}
-            state["lastProcessedId"] = (task.get("payload") or {}).get("requestId")
-            write_json(os.path.join(REVIEW_DIR, "state.json"), state)
+
         return 0
     finally:
         release_busy()
