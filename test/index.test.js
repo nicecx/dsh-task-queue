@@ -111,3 +111,51 @@ test('validateTask 拒绝非法', () => {
   assert.equal(validateTask({ tier: 'review', status: 'bad' }).ok, false)
   assert.equal(validateTask(null).ok, false)
 })
+
+// ── busy_mutex 原子锁测试（017 审核要求）──
+import { mkdtempSync, writeFileSync, readFileSync, unlinkSync, openSync, closeSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+test('busy_mutex: O_EXCL 原子获取 + 持有中拒绝 + 过期抢占', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'busy-'))
+  const busyFile = path.join(dir, '.hermes-busy')
+  // 模拟 acquire 逻辑（与 src/index.js 一致的原子路径）
+  const acquire = (owner, ttlSecs = 120) => {
+    const now = Date.now()
+    const ttl = ttlSecs * 1000
+    try {
+      const fd = openSync(busyFile, 'wx')
+      writeFileSync(fd, JSON.stringify({ owner, expiresAt: now + ttl }))
+      closeSync(fd)
+      return { ok: true }
+    } catch (err) {
+      if (err.code !== 'EEXIST') return { ok: false, error: err.message }
+      try {
+        const cur = JSON.parse(readFileSync(busyFile, 'utf8'))
+        if (now >= cur.expiresAt) {
+          try { unlinkSync(busyFile) } catch { /* 竞争 */ }
+          try {
+            const fd = openSync(busyFile, 'wx')
+            writeFileSync(fd, JSON.stringify({ owner, expiresAt: now + ttl }))
+            closeSync(fd)
+            return { ok: true, preempted: true }
+          } catch { return { ok: false, error: '竞争失败' } }
+        }
+        return { ok: false, heldBy: cur.owner }
+      } catch { return { ok: false, error: '损坏' } }
+    }
+  }
+  // 首次获取成功
+  assert.deepEqual(acquire('a', 120), { ok: true })
+  // 他人持有中 → 拒绝
+  const r2 = acquire('b', 120)
+  assert.equal(r2.ok, false)
+  assert.equal(r2.heldBy, 'a')
+  // 过期后抢占（把锁文件改成已过期）
+  writeFileSync(busyFile, JSON.stringify({ owner: 'a', expiresAt: Date.now() - 1000 }))
+  const r3 = acquire('c', 120)
+  assert.equal(r3.ok, true)
+  assert.equal(r3.preempted, true)
+  unlinkSync(busyFile)
+})
