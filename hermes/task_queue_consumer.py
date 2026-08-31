@@ -25,9 +25,9 @@ import shutil
 import subprocess
 import sys
 
-QUEUE = os.path.expanduser("~/.dsh/task-queue/queue.json")
-BUSY = os.path.expanduser("~/.dsh/task-queue/.hermes-busy")
-REVIEW_DIR = os.path.expanduser("~/.dsh/review-handoff")
+QUEUE = os.environ.get("TASK_QUEUE_PATH") or os.path.expanduser("~/.dsh/task-queue/queue.json")
+BUSY = os.path.join(os.path.dirname(QUEUE), ".hermes-busy")  # 与 DSH 侧 busy_mutex 同一文件
+REVIEW_DIR = os.environ.get("REVIEW_HANDOFF_DIR") or os.path.expanduser("~/.dsh/review-handoff")
 DOCS = os.path.join(REVIEW_DIR, "docs")  # 024/025：PROTOCOL 定义 docs/ 在此目录下
 # 025/026：权威路径（实测存在）；workspace 副本 dsh-reset-handoff/hermes/reset_agent.py 须同步
 RESET_AGENT = os.path.expanduser("~/.hermes/profiles/reset-agent/scripts/reset_agent.py")
