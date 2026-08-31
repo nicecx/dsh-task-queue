@@ -97,7 +97,9 @@ def guardian_cooldown_ok():
         last_dt = datetime.datetime.fromisoformat(last)
         elapsed = (datetime.datetime.now().astimezone() - last_dt).total_seconds()
         if elapsed < RESET_COOLDOWN_SEC:
-            return False, f"reset 10min 退避中（已过 {int(elapsed)}s）"
+            # 021 审核阻塞项：note 必须稳定（无 elapsed 秒数，否则 defer 输出随 tick 变化
+            # 在 10min 冷却窗口内每分钟重复唤醒 agent）
+            return False, "reset 10min 退避中"
     except Exception:
         pass
     return True, ""

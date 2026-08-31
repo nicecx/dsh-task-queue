@@ -22,7 +22,7 @@ spec.loader.exec_module(tqc)
 
 class TestGuardianCooldown(unittest.TestCase):
     def test_c6_cooldown_blocks_reset(self):
-        """C6: last-restart.json 10min 退避期内 → reset 拒绝。"""
+        """C6: last-restart.json 10min 退避期内 → reset 拒绝；note 必须稳定（021 阻塞项：无 elapsed 秒数）。"""
         import datetime as dt
         with tempfile.TemporaryDirectory() as td:
             lr = os.path.join(td, "last-restart.json")
@@ -31,7 +31,8 @@ class TestGuardianCooldown(unittest.TestCase):
             with mock.patch.object(tqc.os.path, "expanduser", return_value=lr):
                 ok, note = tqc.guardian_cooldown_ok()
             self.assertFalse(ok)
-            self.assertIn("退避", note)
+            # 精确断言稳定签名行（含秒数即失败）
+            self.assertEqual(note, "reset 10min 退避中")
 
     def test_c6_no_guardian_allows(self):
         """无冷却记录 → 放行。"""
