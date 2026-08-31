@@ -194,11 +194,14 @@ def execute_task(task):
             "status": "pending",
         }
         write_json(req_path, req)
-        # doc 落盘（024/025/026：消费端同步快照 docs/<requestId>.md，与入队端幂等双保险）
+        # doc 落盘（024/025/026：消费端同步快照 docs/<requestId>.md，与入队端幂等双保险；
+        # 入队端已复制到 docs/ 时 src==dst，须跳过避免 SameFileError）
         doc = payload.get("docPath")
         if doc and os.path.exists(doc):
-            os.makedirs(DOCS, exist_ok=True)
-            shutil.copy2(doc, os.path.join(DOCS, f"{rid or 'pending-queue'}.md"))
+            dst = os.path.join(DOCS, f"{rid or 'pending-queue'}.md")
+            if os.path.realpath(doc) != os.path.realpath(dst):
+                os.makedirs(DOCS, exist_ok=True)
+                shutil.copy2(doc, dst)
         return "done", f"已写 request.json ({rid})"
 
     if tier == "reset":
@@ -271,8 +274,11 @@ def main():
         task["updatedAt"] = now_iso()
         write_json(QUEUE, q)
 
-        # 执行（三态：done / defer / failed）
-        result, note = execute_task(task)
+        # 执行（三态：done / defer / failed；异常兜底 → 计 failed，避免任务卡 processing）
+        try:
+            result, note = execute_task(task)
+        except Exception as e:
+            result, note = "failed", f"execute_task 异常: {type(e).__name__}: {str(e)[:120]}"
 
         # 完成/推迟/失败
         if result == "done":
