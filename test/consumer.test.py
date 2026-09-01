@@ -136,6 +136,19 @@ class TestGuardianCooldown(unittest.TestCase):
             ok2, _ = tqc.review_slot_ok("20260831-888")
             self.assertTrue(ok2)
 
+    def test_0901_reset_format_not_review_pending(self):
+        """20260901 修复: request.json 为 reset 协议格式（schema=dsh-reset-handoff/request）
+        不视为 review pending → 放行（否则 reset 执行后 review 任务全 defer 卡死）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tqc.REVIEW_DIR = td
+            tqc.write_json(os.path.join(td, "request.json"),
+                           {"schema": "dsh-reset-handoff/request", "version": 1,
+                            "id": "reset-1", "reason": "x", "status": "pending"})
+            tqc.write_json(os.path.join(td, "result.json"),
+                           {"protocol": "review-handoff/v1", "requestId": "20260831-999"})
+            ok, _ = tqc.review_slot_ok("20260901-001")
+            self.assertTrue(ok)
+
     def test_026_t9_approve_filtered_by_cron(self):
         """T9: cron pickNext 过滤 approve tier（永不认领，不烧 attempts）。"""
         with tempfile.TemporaryDirectory() as td:

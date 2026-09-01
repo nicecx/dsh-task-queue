@@ -154,8 +154,12 @@ def review_slot_ok(rid):
 
     仅当"存在他人 pending 且该 pending 尚未出 result"才 defer；
     与 PROTOCOL drain 校验（state.json.lastProcessedId != q.requestId 判占用）语义一致。
+    20260901 修复：reset 协议请求（schema=dsh-reset-handoff/request，与 review 共享
+    request.json 文件）不视为 review pending——否则 reset 执行后留下污染，review 任务全 defer。
     """
     q = read_json(os.path.join(REVIEW_DIR, "request.json"))
+    if q and q.get("schema") == "dsh-reset-handoff/request":
+        return True, ""  # reset 协议占用，非 review pending
     if q and q.get("status") == "pending" and q.get("requestId") != rid:
         r = read_json(os.path.join(REVIEW_DIR, "result.json")) or {}
         if r.get("requestId") != q.get("requestId"):
