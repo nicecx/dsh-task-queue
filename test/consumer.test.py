@@ -192,11 +192,13 @@ class TestGuardianCooldown(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tqc.REVIEW_DIR = td
             tqc.RESET_AGENT = os.path.join(td, "reset_agent.py")
-            fake = mock.Mock(returncode=0, stdout="ok", stderr="")
-            with mock.patch.object(tqc.subprocess, "run", return_value=fake) as m:
-                task = {"tier": "reset", "payload": {
-                    "id": "reset-001", "reason": "test", "scope": {"restartDshWeb": True}}}
-                result, note = tqc.execute_task(task)
+            # 无冷却记录（真实 last-restart.json 可能因近期重启处于冷却期，须隔离）
+            with mock.patch.object(tqc, "RESET_LAST_RESTART", os.path.join(td, "nonexistent.json")):
+                fake = mock.Mock(returncode=0, stdout="ok", stderr="")
+                with mock.patch.object(tqc.subprocess, "run", return_value=fake) as m:
+                    task = {"tier": "reset", "payload": {
+                        "id": "reset-001", "reason": "test", "scope": {"restartDshWeb": True}}}
+                    result, note = tqc.execute_task(task)
             self.assertEqual(result, "done")
             self.assertIn("reset_agent.py 完成", note)
             # 验证：写了全字段 request.json（schema/version/id/reason）后调用 agent
