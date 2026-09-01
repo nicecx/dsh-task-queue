@@ -28,6 +28,10 @@ import sys
 QUEUE = os.environ.get("TASK_QUEUE_PATH") or os.path.expanduser("~/.dsh/task-queue/queue.json")
 BUSY = os.path.join(os.path.dirname(QUEUE), ".hermes-busy")  # 与 DSH 侧 busy_mutex 同一文件
 REVIEW_DIR = os.environ.get("REVIEW_HANDOFF_DIR") or os.path.expanduser("~/.dsh/review-handoff")
+# 20260901-023 阻塞修复：reset 协议独立目录（reset_agent.py STATE_DIR 同源）——
+# 此前 reset 写 review-handoff/request.json 覆盖 review 单槽（022 黄金仲裁被吞根因），
+# 且 reset_agent 读 reset-handoff/request.json 读到旧请求重放
+RESET_DIR = os.environ.get("RESET_HANDOFF_DIR") or os.path.expanduser("~/.dsh/reset-handoff")
 DOCS = os.path.join(REVIEW_DIR, "docs")  # 024/025：PROTOCOL 定义 docs/ 在此目录下
 # 025/026：权威路径（实测存在）；workspace 副本 dsh-reset-handoff/hermes/reset_agent.py 须同步
 # env override（E2E 教训 2026-08-31）：离线测试必须能注入假 agent，防误调真实 reset_agent.py
@@ -224,9 +228,9 @@ def execute_task(task):
         ok, note = single_instance_ok()
         if not ok:
             return "defer", f"reset 门禁拒绝: {note}"
-        # 写全字段 request.json（025/026：reset_agent.py read_request 校验 schema/version，
-        # 缺 id/reason → main() KeyError 崩溃；先落盘再调用，保证审计链）
-        write_json(os.path.join(REVIEW_DIR, "request.json"), {
+        # 写全字段 request.json 到 reset 协议目录（20260901-023 阻塞修复：
+        # 此前误写 REVIEW_DIR 覆盖 review 单槽；reset_agent.py 从 RESET_DIR 读取）
+        write_json(os.path.join(RESET_DIR, "request.json"), {
             "schema": "dsh-reset-handoff/request",
             "version": 1,
             "id": payload.get("id", ""),

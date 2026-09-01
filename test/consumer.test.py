@@ -191,6 +191,7 @@ class TestGuardianCooldown(unittest.TestCase):
         """T11: reset 任务 → 写全字段 request.json + 调权威 reset_agent.py（mock）。"""
         with tempfile.TemporaryDirectory() as td:
             tqc.REVIEW_DIR = td
+            tqc.RESET_DIR = td
             tqc.RESET_AGENT = os.path.join(td, "reset_agent.py")
             # 无冷却记录（真实 last-restart.json 可能因近期重启处于冷却期，须隔离）
             with mock.patch.object(tqc, "RESET_LAST_RESTART", os.path.join(td, "nonexistent.json")):
