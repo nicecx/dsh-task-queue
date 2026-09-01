@@ -42,6 +42,9 @@ LEASE_MS = 5 * 60 * 1000
 MAX_ATTEMPTS = 3
 RESET_COOLDOWN_SEC = 600  # 10min 退避
 RESET_TIMEOUT_SEC = 600   # 026：覆盖 health_check(~180s)+recover 多轮重启最坏路径；超时=计 failed 重试
+ARCHIVE = os.environ.get("QUEUE_ARCHIVE_PATH") or os.path.expanduser("~/.dsh/task-queue/queue.archive.jsonl")
+ARCHIVE_AFTER_H = 24          # 025 approved：done 任务 24h 后归档
+BACKLOG_ALERT_N = 3           # 025 approved：queued review ≥3 → 告警签名行（仅告警，不拒绝）
 
 
 def now_iso():
@@ -209,6 +212,16 @@ def execute_task(task):
         sid = payload.get("sessionId")
         if sid:
             req["sessionId"] = sid
+        # 025 approved：覆盖审计——写入前记录被覆盖的 pending（配合 docs/ 快照可追溯恢复）。
+        # 写独立审计文件（不走 log()，避免 monitor 门控被正常流转唤醒）
+        prev = read_json(req_path)
+        if prev and prev.get("requestId") and prev.get("requestId") != (rid or "pending-queue"):
+            try:
+                os.makedirs(os.path.dirname(ARCHIVE), exist_ok=True)
+                with open(os.path.join(os.path.dirname(ARCHIVE), "overwrite.log"), "a", encoding="utf-8") as f:
+                    f.write(json.dumps({"ts": now_iso(), "oldRequestId": prev.get("requestId"), "newRequestId": rid or "pending-queue"}) + "\n")
+            except Exception:
+                pass
         write_json(req_path, req)
         # doc 落盘（024/025/026：消费端同步快照 docs/<requestId>.md，与入队端幂等双保险；
         # 入队端已复制到 docs/ 时 src==dst，须跳过避免 SameFileError）
@@ -252,6 +265,29 @@ def execute_task(task):
     return "failed", f"未知 tier: {tier}"
 
 
+def archive_done(q):
+    """025 approved：done 任务超 24h → 归档 queue.archive.jsonl（append-only），queue.json 瘦身。"""
+    try:
+        now = datetime.datetime.now().astimezone()
+        old = [t for t in q if t.get("status") == "done" and t.get("updatedAt")]
+        stale = []
+        for t in old:
+            try:
+                if (now - datetime.datetime.fromisoformat(t["updatedAt"])).total_seconds() > ARCHIVE_AFTER_H * 3600:
+                    stale.append(t)
+            except Exception:
+                continue
+        if not stale:
+            return
+        os.makedirs(os.path.dirname(ARCHIVE), exist_ok=True)
+        with open(ARCHIVE, "a", encoding="utf-8") as f:
+            for t in stale:
+                f.write(json.dumps(t, ensure_ascii=False) + "\n")
+        q[:] = [t for t in q if t not in stale]
+    except Exception:
+        pass
+
+
 def main():
     dry = "--dry-run" in sys.argv
     q = read_json(QUEUE)
@@ -262,6 +298,14 @@ def main():
         return 0  # 锁被持有（approve 快道或上次 cron），静默跳过
 
     try:
+        # 025 approved：积压告警（仅告警不拒绝）——queued review ≥ BACKLOG_ALERT_N
+        backlog = sum(1 for t in q if t.get("tier") == "review" and t.get("status") == "queued")
+        if backlog >= BACKLOG_ALERT_N:
+            log(f"队列积压: {backlog} 个 review 待审（≥{BACKLOG_ALERT_N}），考虑扩容或用户知情决策")
+        # 025 approved：done 归档（健康静默）
+        archive_done(q)
+        if any(t.get("status") == "queued" for t in q):
+            write_json(QUEUE, q)
         # pickNext（并发 1：有未过期 processing 则跳过；租约过期可重认领）
         now_ms = datetime.datetime.now().timestamp() * 1000
         has_active = any(t.get("status") == "processing" and (t.get("leaseExpiry") or "") and now_ms < _parse_ms(t.get("leaseExpiry")) for t in q)

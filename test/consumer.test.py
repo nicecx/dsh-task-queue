@@ -237,5 +237,41 @@ class TestGuardianCooldown(unittest.TestCase):
             self.assertNotIn("sessionId", req2)
 
 
+    def test_025_t6_reset_writes_reset_dir(self):
+        """025: reset 写 RESET_DIR/request.json（review 单槽不被触碰）。"""
+        with tempfile.TemporaryDirectory() as td:
+            review_dir = os.path.join(td, "review")
+            reset_dir = os.path.join(td, "reset")
+            os.makedirs(review_dir)
+            os.makedirs(reset_dir)
+            tqc.REVIEW_DIR = review_dir
+            tqc.RESET_DIR = reset_dir
+            tqc.RESET_AGENT = os.path.join(td, "agent.py")
+            with mock.patch.object(tqc, "RESET_LAST_RESTART", os.path.join(td, "nonexistent.json")), \
+                 mock.patch.object(tqc.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                task = {"tier": "reset", "payload": {"id": "r9", "reason": "x", "scope": {}}}
+                result, _ = tqc.execute_task(task)
+            self.assertEqual(result, "done")
+            self.assertTrue(os.path.exists(os.path.join(reset_dir, "request.json")), "reset 请求应在 RESET_DIR")
+            self.assertFalse(os.path.exists(os.path.join(review_dir, "request.json")), "review 单槽不被触碰")
+
+    def test_025_t7_review_overwrite_audit(self):
+        """025: review 覆盖已出 result 的 pending 时记录审计（被覆盖 requestId 可追溯）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tqc.REVIEW_DIR = td
+            tqc.DOCS = os.path.join(td, "docs")
+            # 旧 pending 已出 result（单槽放行场景：正常流转覆盖）
+            tqc.write_json(os.path.join(td, "request.json"),
+                           {"requestId": "20260901-OLD", "status": "pending"})
+            tqc.write_json(os.path.join(td, "result.json"),
+                           {"requestId": "20260901-OLD", "verdict": "approved"})
+            task = {"tier": "review", "payload": {
+                "requestId": "20260901-NEW", "title": "t", "docPath": "",
+                "changeFiles": [], "tests": "", "type": "design", "urgency": "normal"}}
+            result, _ = tqc.execute_task(task)
+            self.assertEqual(result, "done")
+            req = tqc.read_json(os.path.join(td, "request.json"))
+            self.assertEqual(req["requestId"], "20260901-NEW")  # 新请求覆盖
+
 if __name__ == "__main__":
     unittest.main()
