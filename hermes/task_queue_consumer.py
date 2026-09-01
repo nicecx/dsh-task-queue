@@ -45,6 +45,8 @@ RESET_TIMEOUT_SEC = 600   # 026：覆盖 health_check(~180s)+recover 多轮重�
 ARCHIVE = os.environ.get("QUEUE_ARCHIVE_PATH") or os.path.expanduser("~/.dsh/task-queue/queue.archive.jsonl")
 ARCHIVE_AFTER_H = 24          # 025 approved：done 任务 24h 后归档
 BACKLOG_ALERT_N = 3           # 025 approved：queued review ≥3 → 告警签名行（仅告警，不拒绝）
+STUCK_MIN = 15                  # 031 approved：request.json pending 超 15min 无 result → 卡死告警
+STUCK_BUCKET = 15               # 分桶粒度：签名行 age//15 档，保证输出恒定（防每 tick 唤醒）
 
 
 def now_iso():
@@ -265,6 +267,27 @@ def execute_task(task):
     return "failed", f"未知 tier: {tier}"
 
 
+def check_stuck_review():
+    """031 approved：卡死检测——request.json pending 且 lastProcessedId != rid 且
+    now - ts > STUCK_MIN → 输出稳定分桶签名行（age//STUCK_BUCKET 档，恒定输出只唤醒一次）。
+    age 基准用 request.json 的 ts（协议权威提交时间），非文件 mtime。"""
+    try:
+        req = read_json(os.path.join(REVIEW_DIR, "request.json"))
+        if not req or req.get("status") != "pending" or not req.get("ts"):
+            return
+        rid = req.get("requestId")
+        s = read_json(os.path.join(REVIEW_DIR, "state.json")) or {}
+        if s.get("lastProcessedId") == rid:
+            return
+        ts = datetime.datetime.fromisoformat(str(req["ts"]).replace("Z", "+00:00"))
+        age_min = int((datetime.datetime.now().astimezone() - ts).total_seconds() // 60)
+        if age_min > STUCK_MIN:
+            bucket = age_min // STUCK_BUCKET
+            log(f"卡死: {rid} pending {age_min // STUCK_BUCKET * STUCK_BUCKET}+min 未消费（lastProcessedId={s.get('lastProcessedId')}）")
+    except Exception:
+        pass
+
+
 def archive_done(q):
     """025 approved：done 任务超 24h → 归档 queue.archive.jsonl（append-only），queue.json 瘦身。"""
     try:
@@ -290,6 +313,8 @@ def archive_done(q):
 
 def main():
     dry = "--dry-run" in sys.argv
+    # 031 approved：卡死检测（空队列也执行——独立于队列消费）
+    check_stuck_review()
     q = read_json(QUEUE)
     if not q or not isinstance(q, list) or len(q) == 0:
         return 0  # 空队列，健康静默

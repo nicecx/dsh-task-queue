@@ -272,6 +272,38 @@ class TestGuardianCooldown(unittest.TestCase):
             self.assertEqual(result, "done")
             req = tqc.read_json(os.path.join(td, "request.json"))
             self.assertEqual(req["requestId"], "20260901-NEW")  # 新请求覆盖
+    def test_031_stuck_review_alert(self):
+        """031: request.json pending 超 15min 且 lastProcessedId != rid → 卡死告警输出。"""
+        import datetime as dt
+        with tempfile.TemporaryDirectory() as td:
+            tqc.REVIEW_DIR = td
+            old_ts = (dt.datetime.now().astimezone() - dt.timedelta(minutes=20)).isoformat()
+            tqc.write_json(os.path.join(td, "request.json"),
+                           {"requestId": "20260901-999", "status": "pending", "ts": old_ts})
+            tqc.write_json(os.path.join(td, "state.json"), {"lastProcessedId": "20260901-998"})
+            import io as _io, contextlib
+            buf = _io.StringIO()
+            with contextlib.redirect_stdout(buf), mock.patch.object(tqc, "log", lambda m: print(m)):
+                tqc.check_stuck_review()
+            out = buf.getvalue()
+            self.assertIn("卡死", out)
+            self.assertIn("20260901-999", out)
+
+    def test_031_stuck_not_alert_when_fresh(self):
+        """031: pending 未超 15min → 无告警输出。"""
+        import datetime as dt
+        with tempfile.TemporaryDirectory() as td:
+            tqc.REVIEW_DIR = td
+            fresh_ts = (dt.datetime.now().astimezone() - dt.timedelta(minutes=5)).isoformat()
+            tqc.write_json(os.path.join(td, "request.json"),
+                           {"requestId": "20260901-999", "status": "pending", "ts": fresh_ts})
+            tqc.write_json(os.path.join(td, "state.json"), {"lastProcessedId": "20260901-998"})
+            import io as _io, contextlib
+            buf = _io.StringIO()
+            with contextlib.redirect_stdout(buf), mock.patch.object(tqc, "log", lambda m: print(m)):
+                tqc.check_stuck_review()
+            self.assertEqual(buf.getvalue(), "")
+
 
 if __name__ == "__main__":
     unittest.main()
