@@ -196,6 +196,30 @@ class TestGuardianCooldown(unittest.TestCase):
             self.assertEqual(args[0], "python3")
             self.assertTrue(args[1].endswith("reset_agent.py"))
 
+    def test_035_t12_session_id_passthrough(self):
+        """035: review 任务透传 sessionId；无 sessionId 时省略键（回落主会话）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tqc.REVIEW_DIR = td
+            tqc.DOCS = os.path.join(td, "docs")
+            # 有 sessionId → 透传
+            task = {"tier": "review", "payload": {
+                "requestId": "20260831-444", "title": "t", "docPath": "",
+                "changeFiles": [], "tests": "", "type": "design", "urgency": "normal",
+                "sessionId": "session-aaaa-bbbb"}}
+            result, _ = tqc.execute_task(task)
+            self.assertEqual(result, "done")
+            req = tqc.read_json(os.path.join(td, "request.json"))
+            self.assertEqual(req.get("sessionId"), "session-aaaa-bbbb")
+            # 无 sessionId → 省略键（不写空串）；先清 request.json 避免单槽 defer
+            os.unlink(os.path.join(td, "request.json"))
+            task2 = {"tier": "review", "payload": {
+                "requestId": "20260831-555", "title": "t2", "docPath": "",
+                "changeFiles": [], "tests": "", "type": "design", "urgency": "normal"}}
+            result2, _ = tqc.execute_task(task2)
+            self.assertEqual(result2, "done")
+            req2 = tqc.read_json(os.path.join(td, "request.json"))
+            self.assertNotIn("sessionId", req2)
+
 
 if __name__ == "__main__":
     unittest.main()

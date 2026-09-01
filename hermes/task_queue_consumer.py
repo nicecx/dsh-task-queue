@@ -196,6 +196,11 @@ def execute_task(task):
             "urgency": payload.get("urgency", "normal"),
             "status": "pending",
         }
+        # 035 approved：透传 sessionId；payload 无 sessionId 时省略该键（勿写空串，
+        # 让 Hermes 回落主会话）
+        sid = payload.get("sessionId")
+        if sid:
+            req["sessionId"] = sid
         write_json(req_path, req)
         # doc 落盘（024/025/026：消费端同步快照 docs/<requestId>.md，与入队端幂等双保险；
         # 入队端已复制到 docs/ 时 src==dst，须跳过避免 SameFileError）
