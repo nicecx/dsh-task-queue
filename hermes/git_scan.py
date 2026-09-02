@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""git_scan.py — 每日低谷扫描 GitHub PR/issue 反馈（用户要求 2026-09-02）。
+"""git_scan.py v2 — 每日低谷扫描 GitHub 提交追踪表并动态刷新（用户要求 2026-09-02）。
 
-用法: python3 git_scan.py            # 输出当前状态摘要（monitor 门控：变化才唤醒 agent）
-      python3 git_scan.py --full     # 详细输出
+追踪表：~/.dsh/github-tracking.json（submissions 状态 + candidates 候选）
+流程：读追踪表 → 扫描各项 PR 真实状态（gh）→ 对比旧状态 → 更新追踪表 + 输出变化。
+输出：首行稳定签名（状态哈希）——monitor 门控：有变化才唤醒 agent。
 
-输出约定：首行稳定签名（各 PR 状态哈希），详情行跟进——monitor 哈希变化 = 有状态变化 → 唤醒。
+用法: python3 git_scan.py [--full]
 """
+import datetime
 import json
 import os
 import subprocess
 import sys
 
-REPOS = [
-    ("awesome-dsh-plugin", ["3919", "4046", "4134"]),   # 收录 PR
-]
-OWN = "nicecx"
+TRACKING = os.environ.get("GITHUB_TRACKING_PATH") or os.path.expanduser("~/.dsh/github-tracking.json")
+UPSTREAM = "awesome-dsh-plugin/awesome-dsh-plugin"
 
 
 def sh(cmd, timeout=30):
@@ -25,35 +25,62 @@ def sh(cmd, timeout=30):
         return ""
 
 
-def pr_status(repo, pr):
-    """返回 (state, title, 评论数)。"""
-    out = sh(["gh", "pr", "view", pr, "--repo", f"{repo}/{repo}", "--json",
-              "state,title,comments,reviews", "--jq",
-              "{state, title, comments: (.comments|length), reviews: (.reviews|length)}"])
+def load_tracking():
+    try:
+        return json.load(open(TRACKING, encoding="utf-8"))
+    except Exception:
+        return {"submissions": [], "candidates": []}
+
+
+def save_tracking(d):
+    tmp = TRACKING + ".tmp"
+    json.dump(d, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    os.replace(tmp, TRACKING)
+
+
+def pr_state(pr):
+    out = sh(["gh", "pr", "view", pr, "--repo", UPSTREAM, "--json", "state,title,comments",
+              "--jq", "{state, comments: (.comments|length)}"])
     try:
         d = json.loads(out)
-        return d.get("state", "?"), d.get("title", "")[:40], d.get("comments", 0), d.get("reviews", 0)
+        state = d.get("state", "?")
     except Exception:
-        return "?", "查询失败", 0, 0
+        return "?", ""
+    checks = sh(["gh", "pr", "checks", pr, "--repo", UPSTREAM, "--json", "name,state",
+                 "--jq", ".[] | .name + \":\" + .state"])
+    gate = "".join(sorted(l.split(":")[-1][:1] for l in checks.splitlines())) if checks else ""
+    return state, gate
 
 
 def main():
-    lines = []
-    for repo, prs in REPOS:
-        for pr in prs:
-            state, title, comments, reviews = pr_status(repo, pr)
-            lines.append(f"PR {repo}#{pr}: {state} | {title} | 评论{comments} 审查{reviews}")
-    # 签名行 = 状态摘要（变化检测用）
-    sig = "|".join(l.split(": ", 1)[1].split(" | ")[0] for l in lines)
-    print(f"[git-scan] {sig}")
+    d = load_tracking()
+    now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    changed = []
+    sigs = []
+    for sub in d.get("submissions", []):
+        pr = sub.get("pr", "")
+        state, gate = pr_state(pr)
+        old = sub.get("status", "")
+        sub["status"] = state
+        sub["gate"] = gate
+        sub["lastCheck"] = now
+        sigs.append(f"{state}{gate}")
+        if state != old:
+            changed.append(f"{sub.get('name')} #{pr}: {old} → {state}（gate={gate}）")
+    d["updatedAt"] = now
+    save_tracking(d)
+    print(f"[git-scan] {'|'.join(sigs)}")
+    if changed:
+        print("变化:")
+        for c in changed:
+            print(f"  {c}")
     if "--full" in sys.argv:
-        for l in lines:
-            print(f"  {l}")
-    # 检查各仓库是否有新 issue（简单计数）
-    for repo in ["dsh-auto-approver", "dsh-design-review", "dsh-task-queue", "dsh-reset-handoff"]:
-        n = sh(["gh", "issue", "list", "--repo", f"{OWN}/{repo}", "--state", "open", "--limit", "10", "--json", "number", "--jq", "length"])
-        if n and n != "0":
-            print(f"  {repo}: {n} 个 open issue")
+        print("当前状态:")
+        for sub in d.get("submissions", []):
+            print(f"  #{sub.get('pr')} {sub.get('name')}: {sub.get('status')} gate={sub.get('gate','')} | {sub.get('issue','')}")
+        cands = d.get("candidates", [])
+        if cands:
+            print(f"候选 {len(cands)} 项: " + ", ".join(c.get("name", "") for c in cands))
     return 0
 
 

@@ -1,0 +1,71 @@
+{
+  "updatedAt": "2026-09-02T08:50:00+08:00",
+  "tracking": {
+    "community": "awesome-dsh-plugin（DSH 插件收录目录，GitHub）"
+  },
+  "submissions": [
+    {
+      "pr": "4020",
+      "name": "dsh-auto-approver",
+      "desc": "审批自动代理（规则层 + Hermes 裁决 + fail-closed 转人工）",
+      "status": "MERGED",
+      "issue": "",
+      "notes": "已收录（2026-09-01）",
+      "lastCheck": "2026-09-02T08:45:00+08:00"
+    },
+    {
+      "pr": "3919",
+      "name": "dsh-reset-handoff",
+      "desc": "重启托管（预检门禁 + 健康检查 + 恢复，DSH 不自毁）",
+      "status": "OPEN",
+      "issue": "",
+      "notes": "gate 已通过（分支重建仅 yml）；等维护者收录",
+      "lastCheck": "2026-09-02T08:45:00+08:00"
+    },
+    {
+      "pr": "4134",
+      "name": "dsh-design-review",
+      "desc": "设计强制评审（auto-submit + 复用评估/模板关卡 + 守则追加）",
+      "status": "OPEN",
+      "issue": "gate Report result 步骤失败（上游 workflow 问题，内容 check 已过）",
+      "notes": "重开 PR（原 4042 仓库 404 修复）；rebase 至最新 main",
+      "lastCheck": "2026-09-02T08:45:00+08:00"
+    },
+    {
+      "pr": "4046",
+      "name": "dsh-task-queue",
+      "desc": "任务队列（reset>approve>review 三级 + 租约/认领 + 排队可见性）",
+      "status": "OPEN",
+      "issue": "gate Report result 步骤失败（上游 workflow 问题，内容 check 已过）",
+      "notes": "rebase 至最新 main（README 自动生成冲突已解）",
+      "lastCheck": "2026-09-02T08:45:00+08:00"
+    }
+  ],
+  "candidates": [
+    {
+      "name": "dsh-macos-calendar",
+      "repo": "nicecx/dsh-macos-calendar",
+      "note": "已部署（日历集成），可评估收录（yml 需准备 + 满 1 天）"
+    },
+    {
+      "name": "dsh-task-watchdog",
+      "repo": "nicecx/dsh-task-watchdog",
+      "note": "已部署（任务心跳/自愈），可评估收录"
+    },
+    {
+      "name": "dsh-matrix-skin",
+      "repo": "nicecx/dsh-matrix-skin",
+      "note": "Matrix 暗色皮肤（已合入 dsh-web-ui 上游）"
+    },
+    {
+      "name": "dsh-relay",
+      "repo": "nicecx/dsh-relay",
+      "note": "iMessage 收发通道"
+    },
+    {
+      "name": "dsh-vision-router",
+      "repo": "nicecx/dsh-vision-router",
+      "note": "视觉任务路由"
+    }
+  ]
+}
