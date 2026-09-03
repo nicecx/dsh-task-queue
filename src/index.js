@@ -19,7 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   defaultConfig, makeTask, enqueue, readQueue, writeQueue, queueStats,
-  pickNext, claim, complete, fail, renew, validateTask,
+  pickNext, claim, complete, fail, renew, validateTask, findRequestIdConflict,
 } from './core.js'
 
 export const name = 'dsh-task-queue'
@@ -56,6 +56,17 @@ export function apply(ctx, rawConfig = {}) {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
       async execute(args) {
+        // 20260903-010 approved（撞号 lesson）措施②：payload.requestId 双源冲突校验
+        // （判据单一权威实现 = core.findRequestIdConflict，与 dsh-design-review nextRequestId 同源）
+        const rid = String((args.payload || {}).requestId || '').trim()
+        if (rid) {
+          const tasks = load()
+          const c = findRequestIdConflict(tasks, {
+            rid,
+            docsExists: (r) => existsSync(path.join(path.dirname(queueDir), 'review-handoff', 'docs', `${r}.md`)),
+          })
+          if (!c.ok) return `❌ ${c.reason}`
+        }
         const task = makeTask({ tier: args.tier, payload: args.payload, priority: args.priority ?? 1 })
         const v = validateTask(task)
         if (!v.ok) return `❌ ${v.error}`

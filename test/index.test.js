@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   defaultConfig, makeTask, enqueue, pickNext, claim, renew, complete, fail,
-  isLeaseExpired, validateTask, queueStats, TIERS,
+  isLeaseExpired, validateTask, queueStats, TIERS, findRequestIdConflict,
 } from '../src/core.js'
 
 const NOW = new Date('2026-08-31T10:00:00Z')
@@ -158,4 +158,30 @@ test('busy_mutex: O_EXCL 原子获取 + 持有中拒绝 + 过期抢占', () => {
   assert.equal(r3.ok, true)
   assert.equal(r3.preempted, true)
   unlinkSync(busyFile)
+})
+
+// ---------- 20260903-010 approved：requestId 撞号冲突检测 ----------
+
+test('010: findRequestIdConflict — queue 已有同号（含终态）→ 冲突', () => {
+  const tasks = [
+    makeTask({ tier: 'review', payload: { type: 'design', requestId: '20260903-005' }, now: NOW }),
+    { ...makeTask({ tier: 'review', payload: { type: 'arbitration', requestId: '20260903-006' }, now: NOW }), status: 'done' },
+  ]
+  assert.equal(findRequestIdConflict(tasks, { rid: '20260903-005' }).ok, false, 'queued 同号冲突')
+  assert.equal(findRequestIdConflict(tasks, { rid: '20260903-006' }).ok, false, 'done 终态同号也冲突（防归档回收复撞）')
+  assert.equal(findRequestIdConflict(tasks, { rid: '20260903-007' }).ok, true, '未用号放行')
+})
+
+test('010: findRequestIdConflict — docs 快照已存在 → 冲突', () => {
+  const tasks = []
+  const c = findRequestIdConflict(tasks, { rid: '20260903-008', docsExists: (r) => r === '20260903-008' })
+  assert.equal(c.ok, false)
+  assert.match(c.reason, /docs 快照/)
+  const ok = findRequestIdConflict(tasks, { rid: '20260903-009', docsExists: () => false })
+  assert.equal(ok.ok, true)
+})
+
+test('010: findRequestIdConflict — 空 rid 放行（自动取号路径）', () => {
+  assert.equal(findRequestIdConflict([], { rid: '' }).ok, true)
+  assert.equal(findRequestIdConflict([], { rid: undefined }).ok, true)
 })

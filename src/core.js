@@ -150,6 +150,28 @@ export function validateTask(task) {
   return { ok: true }
 }
 
+/**
+ * 20260903-010 approved（撞号 lesson）措施②：requestId 冲突检测（纯函数，判据单一权威）。
+ * 与 dsh-design-review nextRequestId 同源判据（queue.json 单一真相源 + docs 快照）：
+ * tasks 已含同号（任何状态——终态也算，防归档后回收复撞）或 docsExists(rid) 为真 → 冲突。
+ * docsExists 由调用方注入（文件系统回调），保持纯函数可测。
+ */
+export function findRequestIdConflict(tasks, { rid, docsExists }) {
+  if (!rid) return { ok: true }
+  const dup = (tasks || []).some((t) => String((t.payload || {}).requestId || '') === rid)
+  if (dup) {
+    return { ok: false, reason: `requestId ${rid} 已在队列中使用（含历史终态，防归档回收复撞）。请改传未用编号，或不传 requestId 由插件自动取号。` }
+  }
+  if (typeof docsExists === 'function') {
+    try {
+      if (docsExists(rid)) {
+        return { ok: false, reason: `requestId ${rid} 已存在 docs 快照——疑似撞号（docs 材料会被覆盖）。请改传未用编号。` }
+      }
+    } catch { /* docs 检查异常不阻断（queue.json 为主校验源） */ }
+  }
+  return { ok: true }
+}
+
 /** 统计队列状态。 */
 export function queueStats(tasks) {
   const stats = { total: tasks.length, queued: 0, processing: 0, done: 0, failed: 0, byTier: {} }
